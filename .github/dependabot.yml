@@ -7,6 +7,10 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    groups:
+      actions-go-fuzz:
+        patterns:
+          - "shogo82148/actions-go-fuzz/*"
 
   - package-ecosystem: "gomod"
     directory: "/"
