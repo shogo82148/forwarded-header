@@ -399,7 +399,9 @@ func Encode(f []*Forwarded) (string, error) {
 
 // maxElements is the maximum number of forwarded-elements that Parse accepts
 // across all header values. It is far beyond any real proxy chain and bounds
-// the memory a single untrusted header can make Parse allocate.
+// the number of Forwarded values a single untrusted header can make Parse
+// allocate. It does not bound memory used for parameters or quoted values
+// within an element.
 const maxElements = 256
 
 // Parse parses the Forwarded header.
