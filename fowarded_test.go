@@ -1,8 +1,10 @@
 package forwardedheader
 
 import (
+	"errors"
 	"net/netip"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -378,6 +380,50 @@ func TestParse_Error(t *testing.T) {
 			if err == nil {
 				t.Errorf("Parse() error = %v", err)
 				return
+			}
+		})
+	}
+}
+
+func TestParse_TooManyElements(t *testing.T) {
+	elems := func(n int) string {
+		return strings.Repeat("for=192.0.2.43,", n-1) + "for=192.0.2.43"
+	}
+
+	// the limit itself is accepted.
+	got, err := Parse([]string{elems(maxElements)})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(got) != maxElements {
+		t.Errorf("len(Parse()) = %d, want %d", len(got), maxElements)
+	}
+
+	tests := []struct {
+		name    string
+		headers []string
+	}{
+		{
+			name:    "single-header",
+			headers: []string{elems(maxElements + 1)},
+		},
+		{
+			name:    "multiple-headers",
+			headers: []string{elems(maxElements), "for=192.0.2.43"},
+		},
+		{
+			name:    "commas-only",
+			headers: []string{strings.Repeat(",", 1<<20)},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse(tt.headers)
+			var e *Error
+			if !errors.As(err, &e) {
+				t.Fatalf("Parse() error = %v, want *Error", err)
 			}
 		})
 	}
