@@ -1,6 +1,7 @@
 package forwardedheader
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/netip"
@@ -260,6 +261,25 @@ func isValidObf(s string) bool {
 	return true
 }
 
+// isValidQuotedChar reports whether b may appear in a quoted-string,
+// either as qdtext or as the second byte of a quoted-pair (RFC 7230 Section 3.2.6).
+// It rejects control characters except HTAB, and DEL.
+func isValidQuotedChar(b byte) bool {
+	return b == '\t' || (b >= 0x20 && b != 0x7f)
+}
+
+// isValidValue reports whether s can be encoded as a token or a quoted-string.
+func isValidValue(s string) bool {
+	for _, b := range []byte(s) {
+		if !isValidQuotedChar(b) {
+			return false
+		}
+	}
+	return true
+}
+
+// writeQuotedString writes s as a quoted-string.
+// s must satisfy isValidValue.
 func writeQuotedString(w io.ByteWriter, s string) {
 	w.WriteByte('"')
 	for _, r := range []byte(s) {
@@ -310,12 +330,39 @@ func writePair(buf *strings.Builder, start int, key, value string) {
 
 // String returns the string representation of the Forwarded header.
 // The returned string is a valid Forwarded header.
+// Host and Proto values that contain control characters are omitted.
+// Use [Encode] to detect such values as an error.
 func (f *Forwarded) String() string {
 	var buf strings.Builder
+	if f != nil {
+		g := *f
+		if !isValidValue(g.Host) {
+			g.Host = ""
+		}
+		if !isValidValue(g.Proto) {
+			g.Proto = ""
+		}
+		f = &g
+	}
 	f.write(&buf)
 	return buf.String()
 }
 
+// validate reports an error if f cannot be encoded as a valid Forwarded header.
+func (f *Forwarded) validate() error {
+	if f == nil {
+		return nil
+	}
+	if !isValidValue(f.Host) {
+		return errors.New("host contains a control character")
+	}
+	if !isValidValue(f.Proto) {
+		return errors.New("proto contains a control character")
+	}
+	return nil
+}
+
+// write writes f to buf. f must pass validate.
 func (f *Forwarded) write(buf *strings.Builder) {
 	if f == nil || *f == (Forwarded{}) {
 		buf.WriteString("for=unknown")
@@ -329,9 +376,16 @@ func (f *Forwarded) write(buf *strings.Builder) {
 }
 
 // Encode encodes the Forwarded header.
-func Encode(f []*Forwarded) string {
+// It returns an error if a Host or Proto value contains a control character
+// (other than HTAB), because such a value cannot be represented in a valid header.
+func Encode(f []*Forwarded) (string, error) {
+	for i, elem := range f {
+		if err := elem.validate(); err != nil {
+			return "", fmt.Errorf("forwardedheader: element %d: %w", i, err)
+		}
+	}
 	if len(f) == 0 {
-		return ""
+		return "", nil
 	}
 
 	var buf strings.Builder
@@ -340,7 +394,7 @@ func Encode(f []*Forwarded) string {
 		buf.WriteByte(',')
 		f[i].write(&buf)
 	}
-	return buf.String()
+	return buf.String(), nil
 }
 
 // maxElements is the maximum number of forwarded-elements that Parse accepts
@@ -437,6 +491,9 @@ func (p *parser) decodeQuotedString() (string, error) {
 			if ch < 0 {
 				return "", p.newError("unexpected EOF")
 			}
+		}
+		if !isValidQuotedChar(byte(ch)) {
+			return "", p.newError("invalid character in quoted-string")
 		}
 		buf.WriteByte(byte(ch))
 		p.next()

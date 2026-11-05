@@ -116,6 +116,28 @@ func TestForwarded_String(t *testing.T) {
 			},
 			want: `for="_foo:______"`,
 		},
+		{
+			name: "quoted-host",
+			f: &Forwarded{
+				Host: "a b\t\"c\\",
+			},
+			want: `host="a b	\"c\\"`,
+		},
+		{
+			name: "omit-host-with-crlf",
+			f: &Forwarded{
+				Host:  "example.com\r\nX-Injected: 1",
+				Proto: "http",
+			},
+			want: `proto=http`,
+		},
+		{
+			name: "omit-proto-with-control-character",
+			f: &Forwarded{
+				Proto: "http\x00",
+			},
+			want: `for=unknown`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -371,6 +393,24 @@ func TestParse_Error(t *testing.T) {
 				"For=\"::%]:00\"",
 			},
 		},
+		{
+			name: "control-character-in-quoted-string",
+			headers: []string{
+				"host=\"example.com\r\nX-Injected: 1\"",
+			},
+		},
+		{
+			name: "escaped-control-character-in-quoted-string",
+			headers: []string{
+				"host=\"example.com\\\n\"",
+			},
+		},
+		{
+			name: "del-in-quoted-string",
+			headers: []string{
+				"proto=\"http\x7f\"",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -380,6 +420,87 @@ func TestParse_Error(t *testing.T) {
 			if err == nil {
 				t.Errorf("Parse() error = %v", err)
 				return
+			}
+		})
+	}
+}
+
+func TestEncode(t *testing.T) {
+	tests := []struct {
+		name string
+		f    []*Forwarded
+		want string
+	}{
+		{
+			name: "nil",
+			f:    nil,
+			want: "",
+		},
+		{
+			name: "multiple",
+			f: []*Forwarded{
+				{For: Node{IP: netip.MustParseAddr("192.0.2.60")}, Proto: "http"},
+				{For: Node{IP: netip.MustParseAddr("2001:db8:cafe::17")}, Host: "example.com"},
+			},
+			want: `for=192.0.2.60;proto=http,for="[2001:db8:cafe::17]";host=example.com`,
+		},
+		{
+			name: "htab-is-allowed",
+			f:    []*Forwarded{{Host: "a\tb"}},
+			want: "host=\"a\tb\"",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Encode(tt.f)
+			if err != nil {
+				t.Fatalf("Encode() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("Encode() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEncode_Error(t *testing.T) {
+	tests := []struct {
+		name string
+		f    []*Forwarded
+	}{
+		{
+			name: "crlf-in-host",
+			f:    []*Forwarded{{Host: "example.com\r\nX-Injected: 1"}},
+		},
+		{
+			name: "lf-in-proto",
+			f:    []*Forwarded{{Proto: "http\n"}},
+		},
+		{
+			name: "nul-in-host",
+			f:    []*Forwarded{{Host: "a\x00b"}},
+		},
+		{
+			name: "del-in-proto",
+			f:    []*Forwarded{{Proto: "http\x7f"}},
+		},
+		{
+			name: "invalid-in-second-element",
+			f: []*Forwarded{
+				{Proto: "http"},
+				{Host: "a\rb"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Encode(tt.f)
+			if err == nil {
+				t.Errorf("Encode() = %q, want error", got)
 			}
 		})
 	}
@@ -420,7 +541,10 @@ func TestParse_TooManyElements(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Parse(tt.headers)
+			got, err := Parse(tt.headers)
+			if got != nil {
+				t.Errorf("Parse() returned %d elements, want nil", len(got))
+			}
 			var e *Error
 			if !errors.As(err, &e) {
 				t.Fatalf("Parse() error = %v, want *Error", err)
@@ -462,7 +586,10 @@ func FuzzParse(f *testing.F) {
 			return
 		}
 
-		encoded := Encode(parsed)
+		encoded, err := Encode(parsed)
+		if err != nil {
+			t.Fatalf("%q: Encode() error = %v", s, err)
+		}
 
 		parsed2, err := Parse([]string{encoded})
 		if err != nil {
