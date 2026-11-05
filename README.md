@@ -32,8 +32,12 @@ func main() {
 			},
 		},
 	}
+	encoded, err := forwardedheader.Encode(forwarded)
+	if err != nil {
+		panic(err)
+	}
 	header := make(http.Header)
-	header.Set("Forwarded", forwardedheader.Encode(forwarded))
+	header.Set("Forwarded", encoded)
 	header.Write(os.Stdout)
 	// Output:
 	// Forwarded: by=203.0.113.43;for=192.0.2.60;proto=http
