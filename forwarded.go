@@ -397,7 +397,15 @@ func Encode(f []*Forwarded) (string, error) {
 	return buf.String(), nil
 }
 
+// maxElements is the maximum number of forwarded-elements that Parse accepts
+// across all header values. It is far beyond any real proxy chain and bounds
+// the number of Forwarded values a single untrusted header can make Parse
+// allocate. It does not bound memory used for parameters or quoted values
+// within an element.
+const maxElements = 256
+
 // Parse parses the Forwarded header.
+// It returns an error if h contains more than 256 forwarded-elements in total.
 func Parse(h []string) ([]*Forwarded, error) {
 	ret := []*Forwarded{}
 	for i, s := range h {
@@ -662,6 +670,9 @@ func (p *parser) parseNode(s string) (Node, error) {
 }
 
 func (p *parser) parse(f []*Forwarded) ([]*Forwarded, error) {
+	if len(f) >= maxElements {
+		return nil, p.newError("too many elements")
+	}
 	elem, err := p.decodeForwardedElement()
 	if err != nil {
 		return nil, err
@@ -679,6 +690,9 @@ func (p *parser) parse(f []*Forwarded) ([]*Forwarded, error) {
 			return f, p.newError("expected ',' but not")
 		}
 		p.next()
+		if len(f) >= maxElements {
+			return nil, p.newError("too many elements")
+		}
 		elem, err := p.decodeForwardedElement()
 		if err != nil {
 			return nil, err
